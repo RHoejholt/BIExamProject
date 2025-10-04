@@ -1,4 +1,3 @@
-#lightweight quick run pipeline
 
 #TO RUN:
 #1 Open anaconda prompt
