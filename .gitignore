@@ -1,0 +1,145 @@
+# -------------------------
+# Bytecode, caches, Python
+# -------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.pyre/
+.coverage
+coverage.xml
+htmlcov/
+
+# -------------------------
+# Virtual environments
+# -------------------------
+# Common venv names
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# -------------------------
+# OS / Editor
+# -------------------------
+# Windows
+Thumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDEs
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# -------------------------
+# Jupyter / Notebooks
+# -------------------------
+.ipynb_checkpoints/
+# Optional: keep executed outputs out of git, but commit notebook source if desired
+# You may also consider using nbstripout or nbformat pre-commit to remove outputs.
+
+# -------------------------
+# Data / large artifacts
+# -------------------------
+# Ignore raw and processed data by default (use DVC / cloud storage for large data)
+data/raw/*
+data/interim/*
+data/processed/*
+
+# But keep sample/demo data (small files) and any explicitly checked-in small datasets:
+!data/raw/samples/
+!data/raw/samples/**
+!data/processed/samples/
+!data/processed/samples/**
+
+# If you store small, checked-in artifacts elsewhere, add explicit negations:
+# !data/processed/decoded/example.parquet
+
+# DVC cache (if you use DVC)
+.dvc/cache/
+.dvc/tmp/
+
+# If you use Git LFS, you might still ignore large files locally:
+# *.zip
+# *.tar.gz
+
+# -------------------------
+# Logs and runtime files
+# -------------------------
+logs/
+*.log
+*.out
+*.err
+tmp/
+temp/
+*.tmp
+
+# -------------------------
+# Build / packaging
+# -------------------------
+dist/
+build/
+eggs/
+*.egg-info/
+pip-wheel-metadata/
+*.egg
+.wheelhouse/
+
+# -------------------------
+# Binary / compiled artifacts
+# -------------------------
+*.so
+*.dylib
+*.pyd
+
+# -------------------------
+# Secrets & credentials
+# -------------------------
+# Environment files
+.env
+.env.*
+# AWS / Google / Azure credentials
+.aws/
+.gcloud/
+.azure/
+credentials/
+secrets/
+id_rsa
+id_rsa.pub
+*.pem
+*.key
+
+# -------------------------
+# Database files
+# -------------------------
+*.sqlite
+*.db
+
+# -------------------------
+# Containers / docker
+# -------------------------
+docker-compose.override.yml
+docker-compose.*.yml
+# Ignore built images / local containers state if any tooling writes files
+*.local.env
+
+# -------------------------
+# Misc common patterns
+# -------------------------
+# macOS Finder tags
+*.localized
+
+# Ignore generated reports / figures if large; keep small report folder explicitly if needed
+reports/figures/*
+!reports/figures/README.md
+
+# End of .gitignore
