@@ -188,3 +188,44 @@ class Transformer:
             df.loc[mask, "y_map"] = y_map
 
         return df
+
+
+
+def filter_and_scale_maps(self, df: pd.DataFrame, map_name_col: str = "_map", x_col: str = "x", y_col: str = "y") -> pd.DataFrame:
+    """
+    Keep only rows whose map is present in self.cfg.map_bounds and compute x_map/y_map
+    scaled to the configured width/height for each map.
+
+    Returns a copy of the DataFrame with x_map and y_map columns (0..width, 0..height).
+    Rows for maps not in cfg.map_bounds or with non-numeric coords are dropped.
+    """
+    if df is None or df.empty:
+        return df
+
+    df = df.copy()
+
+    # canonicalize map column name (if the DF has "map" instead of "_map")
+    if map_name_col not in df.columns and "map" in df.columns:
+        df[map_name_col] = df["map"].astype(str).str.strip().str.lower()
+    else:
+        df[map_name_col] = df[map_name_col].astype(str).str.strip().str.lower()
+
+    # allowed maps from config
+    allowed_maps = set(self.cfg.map_bounds.keys())
+
+    # filter to allowed maps
+    df = df[df[map_name_col].isin(allowed_maps)].copy()
+
+    # coerce numeric coords
+    df[x_col] = pd.to_numeric(df[x_col], errors="coerce")
+    df[y_col] = pd.to_numeric(df[y_col], errors="coerce")
+
+    # compute scaled x_map / y_map using existing scale_coordinates method
+    # (scale_coordinates iterates cfg.map_bounds, so it's compatible)
+    df = self.scale_coordinates(df, map_name_col=map_name_col, x_col=x_col, y_col=y_col)
+
+    # drop rows where scaling failed (x_map/y_map NaN)
+    if "x_map" in df.columns and "y_map" in df.columns:
+        df = df.dropna(subset=["x_map", "y_map"], how="any").reset_index(drop=True)
+
+    return df

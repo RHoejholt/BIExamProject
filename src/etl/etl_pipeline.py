@@ -9,6 +9,7 @@ import logging
 import pandas as pd
 from ..config import Config
 from .extract import Extractor
+from .map_utils import filter_and_scale_mm
 from .transform import Transformer
 from .load import Loader
 from ..features.build_features import add_opening_kill_flag
@@ -96,46 +97,20 @@ def run_all():
     if comp:
         logger.info("Processing competitive dataset")
 
+        # src/etl/etl_pipeline.py (inside run_all(), in the COMPETITIVE mm_master section)
         if "mm_master" in comp:
             mm = transformer.basic_clean(comp["mm_master"])
-            # canonicalize map column to _map
+            # ensure canonical _map present
             mm = transformer.normalize_maps(mm, map_col="_map")
 
             mm = normalize_ids(mm, ["attackerSteamId", "victimSteamId", "attacker", "victim"])
 
-            # ensure numeric columns
             for col in ["x", "y", "damage", "tick"]:
                 if col in mm.columns:
                     mm[col] = pd.to_numeric(mm[col], errors="coerce")
 
-            # At this point run QC to find out-of-bounds rows (pre-scaling)
-            bad = qc.assert_coords_in_bounds(mm, cfg.map_bounds, map_col="_map", x_col="x", y_col="y")
-            if not bad.empty:
-                # save bad rows for inspection (full context)
-                # bad may contain an "index" column; handle both cases
-                try:
-                    bad_idx = bad["index"].tolist() if "index" in bad.columns else bad.index.tolist()
-                except Exception:
-                    bad_idx = bad.index.tolist()
-                bad_full = mm.loc[bad_idx]
-                bad_path = cfg.interim_dir / "mm_master_bad_coords.parquet"
-                bad_full.to_parquet(bad_path, index=False)
-                logger.warning("Found coordinate rows out of bounds: %d", len(bad_full))
-                logger.info("Wrote bad-coordinate rows to %s", bad_path)
-
-                # Clamp coords to bounds to retain rows but ensure validity
-                mm = clamp_coords(mm, cfg.map_bounds, map_col="_map", x_col="x", y_col="y")
-                logger.info("Clamped out-of-bounds coordinates to configured map bounds.")
-
-                # Re-check after clamping
-                bad_after = qc.assert_coords_in_bounds(mm, cfg.map_bounds, map_col="_map", x_col="x", y_col="y")
-                if not bad_after.empty:
-                    logger.warning("Still have out-of-bounds rows after clamping: %d", len(bad_after))
-                else:
-                    logger.info("All coordinates now within bounds after clamping.")
-
-            # scale to pixel coordinates
-            mm = transformer.scale_coordinates(mm, map_name_col="_map", x_col="x", y_col="y")
+            # filter to allowed maps AND compute x_map/y_map using exact csv bounds from Config
+            mm = filter_and_scale_mm(mm, cfg.map_bounds, map_name_col="_map", x_col="x", y_col="y")
 
             if "tick" in mm.columns or "time" in mm.columns or "seconds" in mm.columns:
                 mm = add_opening_kill_flag(mm)

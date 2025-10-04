@@ -1,3 +1,4 @@
+# src/config.py
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict
@@ -12,13 +13,12 @@ class Config:
     map_bounds: Dict[str, Dict] = None
 
     def __post_init__(self):
-        # expanded default bbox (conservative)
-        default_bbox = {"xmin": -3000.0, "xmax": 3000.0,
-                        "ymin": -3000.0, "ymax": 3000.0}
+        # default fallback bbox (if a map isn't in the hardcoded list)
+        default_bbox = {"xmin": -3000.0, "xmax": 3000.0, "ymin": -3000.0, "ymax": 3000.0}
         width = 1024
         height = 1024
 
-        # hardcoded exact map bounds (from your CSV)
+        # ----- hardcoded exact bounds taken from your map_data.csv -----
         csv_bounds = {
             "de_cache": {
                 "xmin": -2031.0, "xmax": 3752.0,
@@ -32,17 +32,17 @@ class Config:
             },
             "de_dust2": {
                 "xmin": -2486.0, "xmax": 2127.0,
-                "ymin": -1150.0, "ymax": 3455.0,
+                "ymin": -3401.0, "ymax": 3032.0,
                 "width": width, "height": height,
             },
             "de_inferno": {
-                "xmin": -1960.0, "xmax": 2797.0,
-                "ymin": -1062.0, "ymax": 3800.0,
+                "xmin": -1733.476, "xmax": 2500.0,
+                "ymin": -787.9688, "ymax": 2500.0,
                 "width": width, "height": height,
             },
             "de_mirage": {
-                "xmin": -3217.0, "xmax": 1912.0,
-                "ymin": -3401.0, "ymax": 1682.0,
+                "xmin": -2500.0, "xmax": 1455.834,
+                "ymin": -2500.0, "ymax": 887.9842,
                 "width": width, "height": height,
             },
             "de_overpass": {
@@ -56,27 +56,35 @@ class Config:
                 "width": width, "height": height,
             },
         }
+        # ---------------------------------------------------------------
 
         bounds: Dict[str, Dict] = {}
-        if self.maps_dir.exists() and self.maps_dir.is_dir():
-            for p in sorted(self.maps_dir.glob("*.png")):
-                name = p.stem.lower()
-                if name in csv_bounds:
-                    bounds[name] = csv_bounds[name]
-                else:
-                    bounds[name] = {
-                        "xmin": default_bbox["xmin"],
-                        "xmax": default_bbox["xmax"],
-                        "ymin": default_bbox["ymin"],
-                        "ymax": default_bbox["ymax"],
-                        "width": width, "height": height,
-                    }
 
-        # fallback if no PNGs found
+        # If there are PNGs in maps_dir, include them.
+        # If a PNG name matches one in csv_bounds, use the csv bounds; otherwise use default_bbox.
+        try:
+            if self.maps_dir.exists() and self.maps_dir.is_dir():
+                for p in sorted(self.maps_dir.glob("*.png")):
+                    name = p.stem.lower()
+                    if name in csv_bounds:
+                        bounds[name] = csv_bounds[name]
+                    else:
+                        bounds[name] = {
+                            "xmin": default_bbox["xmin"],
+                            "xmax": default_bbox["xmax"],
+                            "ymin": default_bbox["ymin"],
+                            "ymax": default_bbox["ymax"],
+                            "width": width,
+                            "height": height,
+                        }
+        except Exception:
+            # ignore maps dir issues and fallback to csv_bounds or defaults below
+            bounds = {}
+
+        # If map PNGs weren't present but we have csv bounds, use them
         if not bounds:
-            bounds = csv_bounds or {
-                "de_dust2": {**default_bbox, "width": width, "height": height},
-                "de_mirage": {**default_bbox, "width": width, "height": height},
-            }
+            # use the csv_bounds directly (so non-PNG deployments still work)
+            bounds = csv_bounds.copy()
 
+        # finally attach to dataclass (frozen) instance
         object.__setattr__(self, "map_bounds", bounds)
