@@ -1,69 +1,190 @@
+# src/etl/transform.py
+
+import re
 import pandas as pd
-from typing import Dict
-from ..config import Config
 import numpy as np
+from typing import Iterable, Optional
+from ..config import Config
+
+_BRACED_RE = re.compile(r'^\s*"?\{[\d,\s]+\}"?\s*$')
+
+def decode_braced_ascii_value(s):
+    if pd.isna(s):
+        return s
+    if isinstance(s, bytes):
+        try:
+            return s.decode("utf-8")
+        except Exception:
+            return s
+    if not isinstance(s, str):
+        return s
+    if not _BRACED_RE.match(s):
+        return s
+    stripped = s.strip().strip('"').strip("'")
+    inner = stripped[1:-1].strip()
+    if not inner:
+        return ""
+    parts = [p.strip() for p in inner.split(",") if p.strip() != ""]
+    try:
+        byte_vals = bytes([int(p) for p in parts])
+        try:
+            return byte_vals.decode("utf-8")
+        except UnicodeDecodeError:
+            return byte_vals.decode("latin-1", errors="ignore")
+    except Exception:
+        return s
+
 
 class Transformer:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
-    def basic_clean(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Basic cleaning: strip column names, drop obvious fully-empty rows."""
+    def basic_clean(self, df: pd.DataFrame, decode_cols: Optional[Iterable[str]] = None) -> pd.DataFrame:
+        """
+        - strip column names
+        - drop rows that are all-NaN
+        - normalize common column names (map-> _map, attackers/victims coords)
+        - decode braced-ascii values for map/team/player columns if present
+        - produce canonical x,y columns (prefer attacker coords then victim then existing x/y)
+        """
         df = df.copy()
         df.columns = [c.strip() for c in df.columns]
-        # drop rows that are all NaN
         df = df.dropna(how="all")
+
+        # rename map -> _map if necessary (helps if this is called on raw competitive data)
+        if "_map" not in df.columns and "map" in df.columns:
+            df = df.rename(columns={"map": "_map"})
+
+        # rename common attacker/victim position columns
+        rename_map = {}
+        if "att_pos_x" in df.columns: rename_map["att_pos_x"] = "att_x"
+        if "att_pos_y" in df.columns: rename_map["att_pos_y"] = "att_y"
+        if "vic_pos_x" in df.columns: rename_map["vic_pos_x"] = "vic_x"
+        if "vic_pos_y" in df.columns: rename_map["vic_pos_y"] = "vic_y"
+        if "att_x" not in df.columns and "attacker_x" in df.columns:
+            rename_map["attacker_x"] = "att_x"
+        if "att_y" not in df.columns and "attacker_y" in df.columns:
+            rename_map["attacker_y"] = "att_y"
+        if "vic_x" not in df.columns and "victim_x" in df.columns:
+            rename_map["victim_x"] = "vic_x"
+        if "vic_y" not in df.columns and "victim_y" in df.columns:
+            rename_map["victim_y"] = "vic_y"
+        if rename_map:
+            df = df.rename(columns=rename_map)
+
+        # decode braced ascii in target columns if detected
+        if decode_cols is None:
+            decode_cols = ["_map", "team_1", "team_2", "att_team", "vic_team", "att_id", "vic_id"]
+        for col in decode_cols:
+            if col in df.columns:
+                sample = df[col].dropna().astype(str).head(200).tolist()
+                matches = sum(1 for v in sample if _BRACED_RE.match(v))
+                if matches >= 1:
+                    df[col] = df[col].apply(decode_braced_ascii_value)
+
+        # normalize map string (basic normalization)
+        if "_map" in df.columns:
+            df["_map"] = df["_map"].astype(str).str.lower().str.replace(" ", "_")
+
+        # build canonical x,y: prefer attacker coords -> victim coords -> x/y if present
+        def coalesce_numeric(cols):
+            for c in cols:
+                if c in df.columns:
+                    vals = pd.to_numeric(df[c], errors="coerce")
+                    yield vals
+            # if none present, yield empty series
+            yield pd.Series([np.nan]*len(df))
+
+        x_series = None
+        for s in coalesce_numeric(["att_x", "vic_x", "x"]):
+            if x_series is None:
+                x_series = s
+            else:
+                x_series = x_series.fillna(s)
+        y_series = None
+        for s in coalesce_numeric(["att_y", "vic_y", "y"]):
+            if y_series is None:
+                y_series = s
+            else:
+                y_series = y_series.fillna(s)
+
+        if x_series is not None and y_series is not None:
+            df["x"] = x_series
+            df["y"] = y_series
+
         return df
 
     def normalize_maps(self, df: pd.DataFrame, map_col: str = "_map") -> pd.DataFrame:
-        """Normalize map names into a consistent format."""
+        """
+        Enforce a single canonical map column: '_map'.
+        - If input has 'map' but not '_map', rename 'map' -> '_map'
+        - If both present, drop the original 'map' (keep '_map')
+        - Normalize casing/spacing (lowercase, underscores)
+        - Decode braced ascii if it looks like braced ascii
+        This is intentionally hard-coded for this project (only target data).
+        """
+        if df is None:
+            return df
         df = df.copy()
+
+        # rename if needed
+        if map_col not in df.columns and "map" in df.columns:
+            df = df.rename(columns={"map": map_col})
+
+        # If both exist prefer map_col and drop legacy 'map'
+        if map_col in df.columns and "map" in df.columns:
+            # keep map_col, drop legacy
+            if map_col != "map":
+                df = df.drop(columns=["map"])
+
+        # Normalize final column contents
         if map_col in df.columns:
-            df[map_col] = df[map_col].astype(str).str.lower().str.replace(" ", "_")
+            # apply basic normalization -> lowercase, underscores, strip
+            df[map_col] = df[map_col].astype(str).str.strip().str.lower().str.replace(r"\s+", "_", regex=True)
+
+            # If values appear like braced ascii, decode them (safe to call)
+            sample = df[map_col].dropna().astype(str).head(200).tolist()
+            matches = sum(1 for v in sample if _BRACED_RE.match(v))
+            if matches >= 1:
+                df[map_col] = df[map_col].apply(decode_braced_ascii_value)
+                # run the normalization again after decode
+                df[map_col] = df[map_col].astype(str).str.strip().str.lower().str.replace(r"\s+", "_", regex=True)
+
         return df
 
-    def scale_coordinates(self, df: pd.DataFrame, map_name_col: str = "_map", x_col: str = "x", y_col: str = "y"):
+    def scale_coordinates(self, df: pd.DataFrame, map_name_col: str = "_map", x_col: str = "x", y_col: str = "y") -> pd.DataFrame:
         """
-        Deterministic linear scaling of in-game coords to pixel coords.
-        Requires cfg.map_bounds to include the map.
-        Returns df with x_map, y_map columns when possible.
+        Vectorized scaling to pixel coordinates (x_map, y_map) using cfg.map_bounds.
+        Assumes cfg.map_bounds keys correspond to the map strings in df[map_name_col].
+        Flips Y to image coordinates (0 top).
         """
         df = df.copy()
-        def _scale_row(row):
-            m = row.get(map_name_col)
-            if m is None or m not in self.cfg.map_bounds:
-                return np.nan, np.nan
-            b = self.cfg.map_bounds[m]
-            # linear map from [xmin,xmax] to [0,width]
-            try:
-                x_map = (row[x_col] - b['xmin']) / (b['xmax'] - b['xmin']) * b['width']
-                y_map = (row[y_col] - b['ymin']) / (b['ymax'] - b['ymin']) * b['height']
-                return x_map, y_map
-            except Exception:
-                return np.nan, np.nan
+        if map_name_col not in df.columns or x_col not in df.columns or y_col not in df.columns:
+            # nothing to do
+            return df
 
-        if x_col in df.columns and y_col in df.columns and map_name_col in df.columns:
-            scaled = df.apply(lambda r: _scale_row(r), axis=1, result_type="expand")
-            df["x_map"] = scaled[0]
-            df["y_map"] = scaled[1]
+        # ensure numeric
+        df[x_col] = pd.to_numeric(df[x_col], errors="coerce")
+        df[y_col] = pd.to_numeric(df[y_col], errors="coerce")
+
+        # initialize empty columns
+        df["x_map"] = np.nan
+        df["y_map"] = np.nan
+
+        for map_name, bounds in self.cfg.map_bounds.items():
+            mask = df[map_name_col] == map_name
+            if not mask.any():
+                continue
+            b = bounds
+            denom_x = (b["xmax"] - b["xmin"]) or 1.0
+            denom_y = (b["ymax"] - b["ymin"]) or 1.0
+            xs = df.loc[mask, x_col]
+            ys = df.loc[mask, y_col]
+            x_map = (xs - b["xmin"]) / denom_x * b["width"]
+            y_map = (ys - b["ymin"]) / denom_y * b["height"]
+            # flip y to image coordinates
+            y_map = b["height"] - y_map
+            df.loc[mask, "x_map"] = x_map
+            df.loc[mask, "y_map"] = y_map
+
         return df
-
-    def aggregate_rounds(self, duels_df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Very small example: create a per-round aggregation table with counts of duels and sum damage.
-        Expects duels_df to have columns: match_id, round, damage, attacker, victim
-        """
-        if duels_df is None or duels_df.empty:
-            return pd.DataFrame()
-        dd = duels_df.copy()
-        # try to find round column alternatives
-        round_cols = [c for c in dd.columns if c.lower().startswith("round")]
-        round_col = round_cols[0] if round_cols else "round"
-        dd[round_col] = dd[round_col].fillna(-1).astype(int)
-        agg = dd.groupby(["match_id", round_col]).agg(
-            duels_count=pd.NamedAgg(column="damage", aggfunc="count"),
-            damage_sum=pd.NamedAgg(column="damage", aggfunc="sum"),
-            unique_attackers=pd.NamedAgg(column="attacker", aggfunc=lambda s: s.nunique())
-        ).reset_index()
-        agg = agg.rename(columns={round_col: "round_no"})
-        return agg

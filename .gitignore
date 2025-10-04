@@ -141,5 +141,3 @@ docker-compose.*.yml
 # Ignore generated reports / figures if large; keep small report folder explicitly if needed
 reports/figures/*
 !reports/figures/README.md
-
-# End of .gitignore
