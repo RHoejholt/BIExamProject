@@ -182,7 +182,22 @@ with left:
     else:
         st.button("Predict probability (single)", disabled=True)
 
+with middle:
+    st.header("Model & artifact")
+    if artifact_missing:
+        st.info("Model artifact not found. Train first or place model at:\n" + str(ARTIFACT_PATH))
+    else:
+        st.write("Model artifact loaded.")
+        st.write("Model type:", type(artifact["model"]))
+        st.write("Number of feature columns:", len(artifact["feature_columns"]))
+        st.write("Examples of feature columns (first 40):")
+        st.write(artifact["feature_columns"][:40])
 
+        # let user inspect raw metrics file if present
+        metrics_file = PROJECT_ROOT / "models" / "mm_firstkill_binary_metrics.json"
+        if metrics_file.exists():
+            st.write("Training metrics (from model run):")
+            st.json(json.loads(metrics_file.read_text()))
 
 with right:
     st.header("Prediction & historical context")
