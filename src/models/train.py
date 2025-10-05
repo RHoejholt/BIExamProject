@@ -1,12 +1,3 @@
-"""
-Simple trainer that builds a binary classifier:
-  target = first_kill_wins (1 if opening_kill_team == winner_team else 0)
-
-Reads: processed/mm_master_clean.parquet
-Writes: models/mm_firstkill_binary.joblib and models/mm_firstkill_binary_metrics.json
-
-Dependencies: pandas, numpy, scikit-learn, joblib
-"""
 from __future__ import annotations
 import json
 from pathlib import Path

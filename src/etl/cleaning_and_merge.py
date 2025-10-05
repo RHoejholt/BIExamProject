@@ -4,7 +4,6 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional
 
-# A simple canonical weapon map; extend as you find more aliases in your data
 WEAPON_CANONICAL = {
     # pistols
     "glock": "glock",
@@ -123,14 +122,6 @@ def expand_economy_wide_to_long(econ_df: pd.DataFrame, round_prefixes: Optional[
 
 
 def merge_players_results_economy(players: pd.DataFrame, results: pd.DataFrame, economy: pd.DataFrame) -> pd.DataFrame:
-    """
-    Produce a unified table linking player-level information with match/map/round
-    economy and match results. This is a pragmatic merge: merge players -> results
-    on match_id and team, then optionally left-join economy on match_id/_map.
-
-    The exact joins depend heavily on column names in your files. This function
-    attempts reasonable defaults and keeps fields prefixed to avoid collisions.
-    """
     # defensive copies
     p = players.copy()
     r = results.copy()

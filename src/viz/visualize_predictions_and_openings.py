@@ -1,4 +1,3 @@
-# scripts/visualize_opening_analysis.py
 import sys
 from pathlib import Path
 import math
@@ -6,7 +5,6 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# optional seaborn for prettier default visuals; fallback to matplotlib if unavailable
 try:
     import seaborn as sns
     sns.set(style="whitegrid")

@@ -1,4 +1,3 @@
-# src/etl/extract_chunked.py
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Iterable

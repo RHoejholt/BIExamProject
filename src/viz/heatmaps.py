@@ -1,4 +1,3 @@
-# src/viz/heatmaps.py
 from pathlib import Path
 from PIL import Image
 import numpy as np

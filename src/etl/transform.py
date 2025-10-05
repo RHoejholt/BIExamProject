@@ -1,5 +1,3 @@
-# src/etl/transform.py
-
 import re
 import pandas as pd
 import numpy as np
@@ -40,13 +38,7 @@ class Transformer:
         self.cfg = cfg
 
     def basic_clean(self, df: pd.DataFrame, decode_cols: Optional[Iterable[str]] = None) -> pd.DataFrame:
-        """
-        - strip column names
-        - drop rows that are all-NaN
-        - normalize common column names (map-> _map, attackers/victims coords)
-        - decode braced-ascii values for map/team/player columns if present
-        - produce canonical x,y columns (prefer attacker coords then victim then existing x/y)
-        """
+
         df = df.copy()
         df.columns = [c.strip() for c in df.columns]
         df = df.dropna(how="all")
@@ -192,13 +184,7 @@ class Transformer:
 
 
 def filter_and_scale_maps(self, df: pd.DataFrame, map_name_col: str = "_map", x_col: str = "x", y_col: str = "y") -> pd.DataFrame:
-    """
-    Keep only rows whose map is present in self.cfg.map_bounds and compute x_map/y_map
-    scaled to the configured width/height for each map.
 
-    Returns a copy of the DataFrame with x_map and y_map columns (0..width, 0..height).
-    Rows for maps not in cfg.map_bounds or with non-numeric coords are dropped.
-    """
     if df is None or df.empty:
         return df
 

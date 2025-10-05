@@ -1,4 +1,3 @@
-# src/etl/map_utils.py
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -71,10 +70,6 @@ def make_heatmap_overlay(
 ):
     """
     Create an RGBA heatmap overlay with adjustable opacity/contrast.
-    - use_log: apply log(1+heat) to enhance low-density areas
-    - vmax_percentile: percentile to compute vmax (robust to spikes)
-    - alpha_scale: multiplies per-pixel alpha
-    - gamma: power transform of normalized intensity
     """
     if mm_df is None or mm_df.empty:
         raise ValueError("mm_df empty")

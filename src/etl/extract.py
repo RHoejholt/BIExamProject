@@ -76,9 +76,6 @@ class Extractor:
             for c in y_candidates[1:]:
                 df["y"] = df["y"].fillna(pd.to_numeric(df[c], errors="coerce"))
 
-        # optionally ensure _map is string and decode braced ascii if needed (reuse earlier decode helper)
-        # If you have decode_braced_ascii_value in transformer, you can import and call it here.
-        # For safety, do a quick strip/normalize:
         if "_map" in df.columns:
             df["_map"] = df["_map"].astype(str).str.strip()
 
