@@ -1,12 +1,3 @@
-# src/models/predict.py
-"""
-Predictor for the binary first-kill model and simple raw-visualization helpers.
-Loads the artifact saved by Trainer and predicts on round-level rows, producing:
-  - pred_int, pred_proba columns
-  - two PNG visualizations:
-      * firstkill_winrate_map_side_heatmaps.png
-      * firstkill_winrate_by_weapon_topN.png
-"""
 from __future__ import annotations
 from pathlib import Path
 from typing import Optional
