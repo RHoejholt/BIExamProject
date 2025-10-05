@@ -32,17 +32,17 @@ class Config:
             },
             "de_dust2": {
                 "xmin": -2486.0, "xmax": 2127.0,
-                "ymin": -3401.0, "ymax": 3032.0,
+                "ymin": -1201.0, "ymax": 3432.0,
                 "width": width, "height": height,
             },
             "de_inferno": {
-                "xmin": -1733.476, "xmax": 2500.0,
-                "ymin": -787.9688, "ymax": 2500.0,
+                "xmin": -2024, "xmax": 3000.0,
+                "ymin": -1101.0, "ymax": 3932.0,
                 "width": width, "height": height,
             },
             "de_mirage": {
-                "xmin": -2500.0, "xmax": 1455.834,
-                "ymin": -2500.0, "ymax": 887.9842,
+                "xmin": -3200.0, "xmax": 2055.834,
+                "ymin": -3200.0, "ymax": 1587.9842,
                 "width": width, "height": height,
             },
             "de_overpass": {

@@ -3,7 +3,7 @@
 #1 Open anaconda prompt
 #2 Navigate to project root
 #3 venv\Scripts\activate
-#4 -m src.etl.etl_pipeline
+#4 python -m src.etl.etl_pipeline
 
 import logging
 import pandas as pd
