@@ -8,15 +8,18 @@ from typing import Dict, List, Optional
 WEAPON_CANONICAL = {
     # pistols
     "glock": "glock",
-    "usp": "usp-s",
-    "usp_s": "usp-s",
+    "us-p": "usps",
+    "usp_s": "usps",
     "p250": "p250",
     "desert_eagle": "deagle",
     "deagle": "deagle",
     # rifles
     "ak47": "ak47",
+    "ak-47": "ak47",
     "m4a1": "m4a1",
+    "m4-a1": "m4a1",
     "m4a4": "m4a4",
+    "m4-a4": "m4a4",
     # SMGs
     "mp9": "mp9",
     "p90": "p90",
@@ -51,7 +54,7 @@ def normalize_ids(df: pd.DataFrame, id_cols: List[str]) -> pd.DataFrame:
     for c in id_cols:
         if c in df.columns:
             df[c] = df[c].where(pd.notna(df[c]), None)
-            df[c] = df[c].astype(str).str.strip().replace({"nan": None, "None": None, "0": None})
+            df[c] = df[c].astype(str).str.strip().replace({"nan": None, "None": None})
     return df
 
 
@@ -85,16 +88,6 @@ def parse_rank_field(df: pd.DataFrame, col: str = "rank") -> pd.DataFrame:
 
 
 def expand_economy_wide_to_long(econ_df: pd.DataFrame, round_prefixes: Optional[List[str]] = None) -> pd.DataFrame:
-    """
-    The economy.csv often contains many columns with per-round equipment values,
-    sometimes named like '1_t1', '2_t1' or just positional columns. This helper
-    attempts to convert a single economy-row-per-map wide-format into a long
-    format with one row per (match_id, map, round_no, team, value).
-
-    You'll likely need to adapt the column detection to match exact column names
-    in your data. This implementation looks for columns composed of digits or
-    ending with '_t1'/'_t2' and produces long table with econ_round_no.
-    """
     if econ_df is None or econ_df.empty:
         return econ_df
     df = econ_df.copy()

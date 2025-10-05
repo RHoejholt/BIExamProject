@@ -1,217 +1,213 @@
-# src/models/train.py
-import pandas as pd
-import numpy as np
+"""
+Simple trainer that builds a binary classifier:
+  target = first_kill_wins (1 if opening_kill_team == winner_team else 0)
+
+Reads: processed/mm_master_clean.parquet
+Writes: models/mm_firstkill_binary.joblib and models/mm_firstkill_binary_metrics.json
+
+Dependencies: pandas, numpy, scikit-learn, joblib
+"""
+from __future__ import annotations
+import json
 from pathlib import Path
+from typing import Optional, Tuple, List
+
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, roc_auc_score, confusion_matrix
 import joblib
-from sklearn.model_selection import train_test_split, cross_val_score, StratifiedKFold
-from sklearn.pipeline import Pipeline
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.preprocessing import StandardScaler
-from sklearn.impute import SimpleImputer
-from sklearn.compose import ColumnTransformer
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PROCESSED_DIR = PROJECT_ROOT / "data" / "processed"
-MODELS_DIR = PROJECT_ROOT / "src" / "models" / "artifacts"
-MODELS_DIR.mkdir(parents=True, exist_ok=True)
+from ..config import Config
 
-def _safe_load(name: str) -> pd.DataFrame:
-    path = PROCESSED_DIR / f"{name}.parquet"
-    if not path.exists():
-        raise FileNotFoundError(f"{path} not found")
-    return pd.read_parquet(path)
 
-def build_features_for_win_prediction(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Build feature dataframe to predict round winner from per-event/round data.
-    Tries to compute:
-      - first_frag (opening_kill or event_rank==1)
-      - team_econ or eco_team_value (if present)
-      - round_no, map, tick
-      - attacker/victim stats aggregated per round if present
-    Result is per-row; may need groupby to per-round depending on input.
-    """
-    df = df.copy()
+def _canon_weapon(w: Optional[str]) -> str:
+    if pd.isna(w) or w is None:
+        return "UNKNOWN"
+    s = str(w).lower().strip()
+    s = "".join(ch for ch in s if ch.isalnum() or ch in ("_", "-"))
+    s = s.replace("-", "").replace(" ", "_")
+    return s or "UNKNOWN"
 
-    # prefer an explicit 'opening_kill' column
-    if "opening_kill" not in df.columns and "event_rank" in df.columns:
-        df["opening_kill"] = df["event_rank"] == 1
 
-    # if we have per-round economy columns, try to infer current team's econ
-    # This is heuristic: look for columns with 'econ' or 'team_money' names
-    econ_cols = [c for c in df.columns if "econ" in c.lower() or "money" in c.lower() or "cash" in c.lower()]
-    # We'll create a numeric 'team_econ' if any found: take first match per row
-    if econ_cols:
-        df["team_econ"] = pd.to_numeric(df[econ_cols[0]], errors="coerce")
-    else:
-        df["team_econ"] = np.nan
+def _group_rare_categories(series: pd.Series, min_count: int = 40, other_label: str = "OTHER_WEAPON") -> pd.Series:
+    counts = series.value_counts(dropna=True)
+    keep = set(counts[counts >= min_count].index)
+    return series.where(series.isin(keep), other_label)
 
-    # Decide target: if 'round_winner' or 'winner' present use it (boolean T/CT)
-    target_col = None
-    for cand in ("round_winner", "winner", "winning_team", "res_winner"):
-        if cand in df.columns:
-            target_col = cand
-            break
 
-    # If target_col is None, try to create a proxy: if attacker/victim flags + team side exist
-    # For simplicity, this function returns rows where target_col exists; training script will enforce that.
-    if target_col is None:
-        # nothing to do here; return df and let caller decide
-        return df
+class Trainer:
+    def __init__(self, cfg: Optional[Config] = None):
+        self.cfg = cfg or Config()
+        self.processed_path = self.cfg.processed_dir / "mm_master_clean.parquet"
+        self.model_dir = self.cfg.project_root / "models"
+        self.model_dir.mkdir(parents=True, exist_ok=True)
+        self.artifact_path = self.model_dir / "mm_firstkill_binary.joblib"
+        self.metrics_path = self.model_dir / "mm_firstkill_binary_metrics.json"
 
-    # Build features DataFrame (per-row)
-    feat_cols = []
-    # basic numeric features
-    for c in ("team_econ", "tick", "round_no"):
-        if c in df.columns:
-            feat_cols.append(c)
-    # boolean opening kill
-    if "opening_kill" in df.columns:
-        df["opening_kill_flag"] = df["opening_kill"].astype(int)
-        feat_cols.append("opening_kill_flag")
+    def load_processed(self) -> pd.DataFrame:
+        if not self.processed_path.exists():
+            raise FileNotFoundError(f"{self.processed_path} not found. Run ETL first.")
+        return pd.read_parquet(self.processed_path)
 
-    # map as categorical (we'll one-hot encode later)
-    if "_map" in df.columns:
-        feat_cols.append("_map")
+    def build_round_level_dataset(self, mm: pd.DataFrame) -> pd.DataFrame:
+        """
+        Return DataFrame with columns:
+         - round_key
+         - first_kill_team
+         - first_kill_weapon (canonicalized)
+         - winner_team
+        Prefer ETL's opening_kill_* fields; otherwise pick earliest event per round.
+        """
+        if mm is None or mm.empty:
+            raise ValueError("Empty mm dataframe")
 
-    # If attacker or victim weapons/ids exist we can include simple indicators
-    if "weapon" in df.columns:
-        feat_cols.append("weapon")
+        df = mm.copy()
 
-    # drop rows missing target
-    df = df[df[target_col].notna()].copy()
+        # build round key
+        if "file" in df.columns and "round" in df.columns:
+            df["_round_key"] = df["file"].astype(str) + "__r__" + df["round"].astype(str)
+        elif "match_id" in df.columns and "round_no" in df.columns:
+            df["_round_key"] = df["match_id"].astype(str) + "__r__" + df["round_no"].astype(str)
+        elif "_map" in df.columns and "round" in df.columns:
+            df["_round_key"] = df["_map"].astype(str) + "__r__" + df["round"].astype(str)
+        else:
+            df["_round_key"] = df.index.astype(str)
 
-    return df, feat_cols, target_col
+        # If ETL produced explicit opening_kill columns, use them:
+        if "opening_kill" in df.columns and "opening_kill_team" in df.columns:
+            op = df[df["opening_kill"].astype(bool)].copy()
+            sort_cols = [c for c in ("tick", "seconds") if c in op.columns]
+            if sort_cols:
+                op = op.sort_values(sort_cols).groupby("_round_key", as_index=False).first()
+            else:
+                op = op.groupby("_round_key", as_index=False).first()
 
-def train_classification_model():
-    """
-    Load merged_professional or mm_master_clean and train a classifier to predict round winner.
-    Saves model at src/models/artifacts/win_classifier.joblib
-    """
-    # try merged_professional first, then mm_master_clean
-    try:
-        df = _safe_load("merged_professional")
-    except Exception:
-        df = _safe_load("mm_master_clean")
+            winner_col = next((c for c in ("winner_team", "res_match_winner", "round_winner") if c in op.columns), None)
+            winner_series = op[winner_col].astype(str) if winner_col and winner_col in op.columns else pd.Series([None] * len(op))
+            weapon_col = "opening_kill_weapon" if "opening_kill_weapon" in op.columns else next((c for c in ("wp_canon", "wp", "weapon", "wp_type") if c in op.columns), None)
 
-    df = df.reset_index(drop=True)
+            out = pd.DataFrame({
+                "round_key": op["_round_key"].astype(str),
+                "first_kill_team": op["opening_kill_team"].astype(str).fillna("UNKNOWN"),
+                "first_kill_weapon": op[weapon_col].apply(_canon_weapon).astype(str) if weapon_col else pd.Series(["UNKNOWN"] * len(op)),
+                "winner_team": winner_series.fillna("UNKNOWN").astype(str),
+            })
+            return out.reset_index(drop=True)
 
-    df, feat_cols, target_col = build_features_for_win_prediction(df)
+        # fallback: earliest event per round
+        sort_cols = [c for c in ("tick", "seconds") if c in df.columns]
+        if sort_cols:
+            df = df.sort_values(sort_cols).groupby("_round_key", as_index=False).first()
+        else:
+            df = df.groupby("_round_key", as_index=False).first()
 
-    # simple fallback: if target holds strings for team names, convert to binary using a column 'team' if present
-    # If target is 'T'/'CT' or 't'/'ct', map to 1/0
-    y_raw = df[target_col]
-    if y_raw.dtype == object:
-        y = y_raw.apply(lambda v: 1 if str(v).lower().startswith("t") else 0)
-    else:
-        # numeric -> assume already 0/1
-        y = pd.to_numeric(y_raw, errors="coerce").astype(int)
+        att_col = next((c for c in ("att_team", "attacker_team", "att_team_name") if c in df.columns), None)
+        wp_col = next((c for c in ("wp_canon", "wp", "weapon", "wp_type") if c in df.columns), None)
+        winner_col = next((c for c in ("winner_team", "res_match_winner", "round_winner") if c in df.columns), None)
 
-    # select candidate features, use only those available
-    X = df.copy()
-    # keep the features detected earlier
-    # Expand categorical columns
-    candidate_num = [c for c in ("team_econ", "tick", "round_no", "opening_kill_flag") if c in X.columns]
-    candidate_cat = [c for c in ("_map", "weapon") if c in X.columns]
+        out = pd.DataFrame({
+            "round_key": df["_round_key"].astype(str),
+            "first_kill_team": df[att_col].astype(str).fillna("UNKNOWN") if att_col else pd.Series(["UNKNOWN"] * len(df)),
+            "first_kill_weapon": df[wp_col].apply(_canon_weapon).astype(str).fillna("UNKNOWN") if wp_col else pd.Series(["UNKNOWN"] * len(df)),
+            "winner_team": df[winner_col].astype(str).fillna("UNKNOWN") if winner_col else pd.Series(["UNKNOWN"] * len(df)),
+        })
+        return out.reset_index(drop=True)
 
-    # build preprocessing
-    from sklearn.preprocessing import OneHotEncoder
-    from sklearn.pipeline import Pipeline
-    from sklearn.compose import ColumnTransformer
+    def featurize_binary(self, df_rounds: pd.DataFrame, min_weapon_count: int = 40) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
+        """
+        Simple featurization:
+         - canonicalize & group rare weapons
+         - one-hot weapon categories -> features
+         - target y: first_kill_wins (1 if first_kill_team == winner_team)
+        """
+        r = df_rounds.copy()
+        if "first_kill_weapon" not in r.columns:
+            r["first_kill_weapon"] = "UNKNOWN"
+        r["first_kill_weapon"] = r["first_kill_weapon"].astype(str).fillna("UNKNOWN").apply(_canon_weapon)
+        r["first_kill_weapon"] = _group_rare_categories(r["first_kill_weapon"], min_count=min_weapon_count)
 
-    num_transform = Pipeline([("imputer", SimpleImputer(strategy="median")), ("scale", StandardScaler())])
-    cat_transform = Pipeline([("impute", SimpleImputer(strategy="constant", fill_value="NA")), ("ohe", OneHotEncoder(handle_unknown="ignore", sparse=False))])
+        # target
+        y = (r["first_kill_team"].astype(str).fillna("UNKNOWN") == r["winner_team"].astype(str).fillna("UNKNOWN")).astype(int)
 
-    preproc = ColumnTransformer(
-        transformers=[
-            ("num", num_transform, candidate_num),
-            ("cat", cat_transform, candidate_cat),
-        ],
-        remainder="drop"
-    )
+        # one-hot weapon
+        X = pd.get_dummies(r[["first_kill_weapon"]].astype(str), columns=["first_kill_weapon"], prefix=["wp"])
+        feature_cols = X.columns.tolist()
 
-    X_use = X[candidate_num + candidate_cat].copy().reset_index(drop=True)
-    # if nothing to train on, abort
-    if X_use.shape[1] == 0:
-        raise RuntimeError("No features available to train on.")
+        # inside Trainer.featurize_binary (or Trainer.featurize_binary equivalent)
+        # after weapon one-hot (X already contains weapon ohe)
+        # Add map one-hot (optional, set include_map True):
+        if "_map" in r.columns:
+            map_ohe = pd.get_dummies(r[["_map"]].astype(str), columns=["_map"], prefix=["map"])
+            X = pd.concat([X, map_ohe], axis=1)
+            feature_cols += map_ohe.columns.tolist()
 
-    X_train, X_test, y_train, y_test = train_test_split(X_use, y, test_size=0.2, random_state=42, stratify=y)
+        # Add attacker side as a feature if available
+        if "first_kill_side" in r.columns:
+            side_ohe = pd.get_dummies(r[["first_kill_side"]].astype(str), columns=["first_kill_side"], prefix=["side"])
+            X = pd.concat([X, side_ohe], axis=1)
+            feature_cols += side_ohe.columns.tolist()
+        elif "att_side" in r.columns:
+            side_ohe = pd.get_dummies(r[["att_side"]].astype(str), columns=["att_side"], prefix=["side"])
+            X = pd.concat([X, side_ohe], axis=1)
+            feature_cols += side_ohe.columns.tolist()
 
-    # classifier
-    clf = Pipeline([("pre", preproc), ("clf", RandomForestClassifier(n_estimators=200, class_weight="balanced", random_state=42, n_jobs=-1))])
+        # add optional numeric features if present (harmless if absent)
+        for num in ("ct_eq_val", "t_eq_val", "avg_match_rank", "hp_dmg", "arm_dmg"):
+            if num in r.columns:
+                X[num] = pd.to_numeric(r[num], errors="coerce").fillna(0.0)
+                feature_cols.append(num)
 
-    # cross-val
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    scores = cross_val_score(clf, X_train, y_train, cv=cv, scoring="roc_auc", n_jobs=-1)
-    print("CV ROC-AUC:", scores.mean(), "+/-", scores.std())
+        return X.fillna(0.0), y, feature_cols
 
-    clf.fit(X_train, y_train)
-    preds = clf.predict(X_test)
-    probs = clf.predict_proba(X_test)[:, 1]
+    def train_binary(self, test_size: float = 0.2, random_state: int = 42, min_weapon_count: int = 40) -> dict:
+        mm = self.load_processed()
+        rounds = self.build_round_level_dataset(mm)
+        X, y, feature_cols = self.featurize_binary(rounds, min_weapon_count=min_weapon_count)
 
-    print("Accuracy:", accuracy_score(y_test, preds))
-    print("Precision:", precision_score(y_test, preds))
-    print("Recall:", recall_score(y_test, preds))
-    print("F1:", f1_score(y_test, preds))
-    print("ROC-AUC:", roc_auc_score(y_test, probs))
+        if len(y.unique()) < 2:
+            raise ValueError("Not enough class variety to train (need both 0 and 1).")
 
-    model_path = MODELS_DIR / "win_classifier.joblib"
-    joblib.dump(clf, model_path)
-    print("Saved classifier to", model_path)
-    return clf
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=random_state, stratify=y)
 
-def train_regression_model(target_column: str = "team_econ"):
-    """
-    Train a regression model to predict a numeric target (team economy or similar).
-    """
-    try:
-        df = _safe_load("merged_professional")
-    except Exception:
-        df = _safe_load("mm_master_clean")
+        clf = RandomForestClassifier(n_estimators=200, class_weight="balanced", random_state=random_state, n_jobs=-1)
+        clf.fit(X_train, y_train)
 
-    df = df.reset_index(drop=True)
+        y_pred = clf.predict(X_test)
+        y_proba = clf.predict_proba(X_test)[:, 1] if hasattr(clf, "predict_proba") else None
 
-    # simple features: opening_kill_flag and round_no, _map
-    if "opening_kill" not in df.columns and "event_rank" in df.columns:
-        df["opening_kill"] = df["event_rank"] == 1
-    if "opening_kill" in df.columns:
-        df["opening_kill_flag"] = df["opening_kill"].astype(int)
+        acc = float(accuracy_score(y_test, y_pred))
+        report = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
+        roc_auc = float(roc_auc_score(y_test, y_proba)) if (y_proba is not None and len(set(y_test.tolist())) == 2) else None
+        cm = confusion_matrix(y_test, y_pred).tolist()
 
-    if target_column not in df.columns:
-        raise RuntimeError(f"Target {target_column} not found in data.")
+        artifact = {
+            "model": clf,
+            "feature_columns": feature_cols,
+            "label_map": {0: "first_kill_lost", 1: "first_kill_won"},
+            "min_weapon_count": int(min_weapon_count),
+        }
+        joblib.dump(artifact, self.artifact_path)
 
-    y = pd.to_numeric(df[target_column], errors="coerce")
-    X = df[["opening_kill_flag"]].copy() if "opening_kill_flag" in df.columns else pd.DataFrame()
-    if "_map" in df.columns:
-        X["_map"] = df["_map"]
+        metrics = {
+            "accuracy": acc,
+            "roc_auc": roc_auc,
+            "classification_report": report,
+            "confusion_matrix": cm,
+            "n_features": len(feature_cols),
+            "n_train": int(X_train.shape[0]),
+            "n_test": int(X_test.shape[0]),
+        }
+        with open(self.metrics_path, "w") as fh:
+            json.dump(metrics, fh, indent=2)
 
-    # simple preprocessing (numeric + map OHE)
-    num_cols = [c for c in X.columns if X[c].dtype != object and c != "_map"]
-    cat_cols = [c for c in X.columns if c == "_map"]
+        return {"artifact_path": str(self.artifact_path), "metrics_path": str(self.metrics_path), "metrics": metrics}
 
-    from sklearn.pipeline import Pipeline
-    from sklearn.compose import ColumnTransformer
-    from sklearn.preprocessing import OneHotEncoder
 
-    num_transform = Pipeline([("imputer", SimpleImputer(strategy="median")), ("scale", StandardScaler())])
-    cat_transform = Pipeline([("imputer", SimpleImputer(strategy="constant", fill_value="NA")), ("ohe", OneHotEncoder(handle_unknown="ignore", sparse=False))])
-
-    preproc = ColumnTransformer(transformers=[("num", num_transform, num_cols), ("cat", cat_transform, cat_cols)], remainder="drop")
-    X_use = X[num_cols + cat_cols]
-
-    X_train, X_test, y_train, y_test = train_test_split(X_use, y, test_size=0.2, random_state=42)
-
-    model = Pipeline([("pre", preproc), ("rf", RandomForestRegressor(n_estimators=200, random_state=42, n_jobs=-1))])
-    model.fit(X_train, y_train)
-
-    yp = model.predict(X_test)
-    print("RMSE:", mean_squared_error(y_test, yp, squared=False))
-    print("MAE:", mean_absolute_error(y_test, yp))
-    print("R2:", r2_score(y_test, yp))
-
-    model_path = MODELS_DIR / "econ_regressor.joblib"
-    joblib.dump(model, model_path)
-    print("Saved regressor to", model_path)
-    return model
+if __name__ == "__main__":
+    t = Trainer()
+    info = t.train_binary()
+    print("Training finished. Artifact saved to:", info["artifact_path"])
+    print("Metrics saved to:", info["metrics_path"])
+    print(json.dumps(info["metrics"], indent=2))

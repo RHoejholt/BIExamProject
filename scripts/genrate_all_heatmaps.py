@@ -1,4 +1,4 @@
-# scripts/generate_all_heatmaps_strong.py
+
 from src.config import Config
 from src.etl.map_utils import amplify_overlay_alpha
 from src.etl.map_utils import filter_and_scale_mm, make_heatmap_overlay
