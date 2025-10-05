@@ -19,3 +19,9 @@ joblib>=1.2
 plotly>=5.0   # interactive plots (optional)
 notebook      # if you use notebooks
 jupyterlab    # optional
+
+# app stuff
+streamlit
+pillow
+matplotlib
+numpy

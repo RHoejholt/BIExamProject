@@ -1,3 +1,12 @@
+# src/models/train.py
+"""
+Trainer for the "first-kill wins" binary model.
+Trains a RandomForestClassifier on round-level data extracted from
+data/processed/mm_master_clean.parquet and saves an artifact including:
+  - model
+  - feature_columns
+  - label_map
+"""
 from __future__ import annotations
 import json
 from pathlib import Path

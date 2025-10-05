@@ -43,7 +43,10 @@ Run ETL (load & clean raw -> processed)
 
 4.  Navigate to project root
 
-5.  venv\Scripts\activate
+5.  Windows:
+      venv\Scripts\activate 
+    mac/linux
+      source venv/bin/activate
 
 6.  python -m src.etl.etl_pipeline
 
@@ -96,3 +99,6 @@ Dust2 Heatmap
 ![Dust2 Heatmap](sample_visuals\de_dust2_composite.png)
 ![Winrate for team with first elimination, for each map](sample_visuals/opening_winrate_by_map.png)
 ![Winrate for team with first elimination with each weapon](sample_visuals/opening_winrate_by_weapon_topN.png)
+
+# run the app
+streamlit run app/app.py
