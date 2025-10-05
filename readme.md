@@ -88,8 +88,11 @@ Outputs (images and parquets) go to:
     data/processed/
 
 
-Sample visuals:
+## Sample visuals:
 
-sample_visuals/de_cache_composite.png
-
-
+Cache Heatmap
+![Cache Heatmap](sample_visuals/de_cache_composite.png)
+Dust2 Heatmap
+![Dust2 Heatmap](sample_visuals\de_dust2_composite.png)
+![Winrate for team with first elimination, for each map](sample_visuals/opening_winrate_by_map.png)
+![Winrate for team with first elimination with each weapon](sample_visuals/opening_winrate_by_weapon_topN.png)
