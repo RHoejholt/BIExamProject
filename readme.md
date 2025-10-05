@@ -87,3 +87,9 @@ Heatmaps of where damage is dealt from (attacker if available, then the receiver
 Outputs (images and parquets) go to:
     data/processed/
 
+
+Sample visuals:
+
+sample_visuals/de_cache_composite.png
+
+
