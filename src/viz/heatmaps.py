@@ -1,3 +1,5 @@
+"""After running ETL pipeline, this can be run to generate heatmaps on top of the csgo maps"""
+
 from pathlib import Path
 from PIL import Image
 import numpy as np
