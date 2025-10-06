@@ -289,6 +289,3 @@ if (not artifact_missing) and ('predict_button' in locals() and predict_button):
             hist_map_side_plot.pyplot(fig2)
         else:
             hist_map_side_plot.write("No map×side historical data for selected map.")
-
-# No bulk-predict UI and no caption are included.
-
