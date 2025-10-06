@@ -125,4 +125,3 @@ def make_heatmap_overlay(
     img.save(out_path, format="PNG")
     return out_path
 
-

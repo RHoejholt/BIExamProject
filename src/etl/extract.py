@@ -1,111 +1,105 @@
 from pathlib import Path
+from typing import Dict, Optional
 import pandas as pd
 from ..config import Config
-from ..utils.io import read_csv
 
 class Extractor:
+    """
+    enkel extractor der håndterer både competitive og professional csv'er.
+    - primary extract class: læs hele competitive mm_master eller chunks
+    - normalize_competitive_columns sikrer _map, x/y canonical cols
+    """
+
+    def __init__(self, cfg: Config, chunksize: int = 200_000):
+        self.cfg = cfg
+        self.chunksize = int(chunksize)
 
     def normalize_competitive_columns(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Normalize column names and create canonical columns:
-          - map or _map  -> _map
-          - attacker/victim position pairs:
-              att_pos_x, att_pos_y -> att_x, att_y
-              vic_pos_x, vic_pos_y -> vic_x, vic_y
-          - canonical x,y: pick attacker coords if present else victim coords
-        Returns the modified DataFrame (copy).
-        """
+        # normaliser kolonnenavne og dann canonical x,y og _map
         df = df.copy()
-
-        # standardize common name variants -> single names
-        rename_map = {}
-        if "map" in df.columns and "_map" not in df.columns:
-            rename_map["map"] = "_map"
-
-        # attacker coords
+        if "_map" not in df.columns and "map" in df.columns:
+            df = df.rename(columns={"map": "_map"})
+        # position kolonne-forksellige navne -> standard
         if "att_pos_x" in df.columns:
-            rename_map["att_pos_x"] = "att_x"
+            df = df.rename(columns={"att_pos_x": "att_x"})
         if "att_pos_y" in df.columns:
-            rename_map["att_pos_y"] = "att_y"
-
-        # victim coords
+            df = df.rename(columns={"att_pos_y": "att_y"})
         if "vic_pos_x" in df.columns:
-            rename_map["vic_pos_x"] = "vic_x"
+            df = df.rename(columns={"vic_pos_x": "vic_x"})
         if "vic_pos_y" in df.columns:
-            rename_map["vic_pos_y"] = "vic_y"
-
-        # other common variants
+            df = df.rename(columns={"vic_pos_y": "vic_y"})
+        # andre varianter
         if "attacker_x" in df.columns and "att_x" not in df.columns:
-            rename_map["attacker_x"] = "att_x"
+            df = df.rename(columns={"attacker_x": "att_x"})
         if "attacker_y" in df.columns and "att_y" not in df.columns:
-            rename_map["attacker_y"] = "att_y"
-
+            df = df.rename(columns={"attacker_y": "att_y"})
         if "victim_x" in df.columns and "vic_x" not in df.columns:
-            rename_map["victim_x"] = "vic_x"
+            df = df.rename(columns={"victim_x": "vic_x"})
         if "victim_y" in df.columns and "vic_y" not in df.columns:
-            rename_map["victim_y"] = "vic_y"
+            df = df.rename(columns={"victim_y": "vic_y"})
 
-        df = df.rename(columns=rename_map)
+        # coalesce attacker/victim/x into canonical x,y
+        x_candidates = [c for c in ("att_x", "vic_x", "x") if c in df.columns]
+        y_candidates = [c for c in ("att_y", "vic_y", "y") if c in df.columns]
 
-        # create canonical x,y: prefer attacker coords, fallback to victim coords
-        # (use pd.to_numeric to coerce strings -> numbers)
-        x_candidates = []
-        y_candidates = []
-        if "att_x" in df.columns:
-            x_candidates.append("att_x")
-        if "vic_x" in df.columns:
-            x_candidates.append("vic_x")
-        if "x" in df.columns:
-            x_candidates.append("x")
-        if "att_y" in df.columns:
-            y_candidates.append("att_y")
-        if "vic_y" in df.columns:
-            y_candidates.append("vic_y")
-        if "y" in df.columns:
-            y_candidates.append("y")
-
-        # build canonical x
         if x_candidates:
-            # create a series by coalescing candidates
             df["x"] = pd.to_numeric(df[x_candidates[0]], errors="coerce")
             for c in x_candidates[1:]:
                 df["x"] = df["x"].fillna(pd.to_numeric(df[c], errors="coerce"))
-        # build canonical y
         if y_candidates:
             df["y"] = pd.to_numeric(df[y_candidates[0]], errors="coerce")
             for c in y_candidates[1:]:
                 df["y"] = df["y"].fillna(pd.to_numeric(df[c], errors="coerce"))
 
         if "_map" in df.columns:
-            df["_map"] = df["_map"].astype(str).str.strip()
+            df["_map"] = df["_map"].astype(str).str.strip().str.lower().str.replace(" ", "_")
 
         return df
 
-    def __init__(self, cfg: Config):
-        self.cfg = cfg
-
-    def load_competitive(self):
+    def load_competitive(self) -> Dict[str, pd.DataFrame]:
+        """
+        læs competitive files fra data/raw/competitive
+        returnerer dict med keys: mm_master (DataFrame), mm_grenades (DataFrame) hvis findes
+        """
         base = self.cfg.raw_dir / "competitive"
-        outputs = {}
+        out = {}
         mm_path = base / "mm_master_demos.csv"
         if mm_path.exists():
-            df = read_csv(mm_path, low_memory=False)
+            df = pd.read_csv(mm_path, low_memory=False)
             df = self.normalize_competitive_columns(df)
-            outputs["mm_master"] = df
-        # other files...
-        if (base / "mm_grenades_demos.csv").exists():
-            mg = read_csv(base / "mm_grenades_demos.csv", low_memory=False)
-            mg = self.normalize_competitive_columns(mg)  # safe no-op if cols absent
-            outputs["mm_grenades"] = mg
-        if (base / "map_data.csv").exists():
-            outputs["map_data"] = read_csv(base / "map_data.csv")
-        return outputs
+            out["mm_master"] = df
+        gren_path = base / "mm_grenades_demos.csv"
+        if gren_path.exists():
+            mg = pd.read_csv(gren_path, low_memory=False)
+            mg = self.normalize_competitive_columns(mg)
+            out["mm_grenades"] = mg
+        map_data_path = base / "map_data.csv"
+        if map_data_path.exists():
+            out["map_data"] = pd.read_csv(map_data_path)
+        return out
 
-    def load_professional(self):
+    def load_professional(self) -> Dict[str, pd.DataFrame]:
+        """
+        læs professional csvs fra data/raw/professional
+        returnerer dict med keys som filnavne uden .csv
+        """
         base = self.cfg.raw_dir / "professional"
-        outputs = {}
-        for fname in ["results.csv", "picks.csv", "economy.csv", "players.csv"]:
+        out = {}
+        for fname in ("results.csv", "economy.csv", "players.csv", "picks.csv"):
             p = base / fname
             if p.exists():
-                outputs[fname.replace(".csv", "")] = read_csv(p, low_memory=False, parse_dates=["date"] if fname=="economy.csv" else None)
-        return outputs
+                parse_dates = ["date"] if fname == "economy.csv" else None
+                out[fname.replace(".csv", "")] = pd.read_csv(p, low_memory=False, parse_dates=parse_dates)
+        return out
+
+    def read_competitive_chunked(self, filename: str = "mm_master_demos.csv"):
+        """
+        generator der yield'er normaliserede chunks (i tilfælde af memory constraints).
+        hver yield er (i, chunk_df).
+        """
+        base = self.cfg.raw_dir / "competitive"
+        file_path = base / filename
+        if not file_path.exists():
+            return
+        for i, chunk in enumerate(pd.read_csv(file_path, chunksize=self.chunksize, low_memory=False)):
+            yield i, self.normalize_competitive_columns(chunk)
