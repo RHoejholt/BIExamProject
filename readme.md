@@ -69,12 +69,12 @@ Train the "first-kill wins" binary model and save artifact:
 
 This writes artifact(s) to `models/mm_firstkill_binary.joblib` (and metrics JSON).
 
-Predict & save predictions with round context
+Predict
 ---------------------------------------------
-Create per-round predictions merged with context:
-    python scripts/save_predictions_with_context.py
+The model can now be used to make predictions on winning team.
 
-This writes `models/predictions_with_context.csv`.
+python src/models/predict.py
+
 
 Visualize predictions / generate figures
 ----------------------------------------

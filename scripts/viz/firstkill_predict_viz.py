@@ -1,5 +1,4 @@
-# python src\viz\firstkill_predict_viz.py
-
+# src/viz/firstkill_predict_viz.py
 from pathlib import Path
 import numpy as np
 import pandas as pd
@@ -17,6 +16,8 @@ from src.models.predict import Predictor
 
 # Tuning
 MIN_MAP_OPENS = 100     # only include maps with at least this many opening events
+MIN_WEAPON_COUNT = 40   # min times a weapon must appear to be included
+TOP_WEAPONS = 30        # max weapons to plot
 FIG_DPI = 150
 
 def _canon_weapon(w):
@@ -95,6 +96,88 @@ def build_opening_rounds(mm: pd.DataFrame) -> pd.DataFrame:
         out["_map"] = df["map"].astype(str)
     return out.reset_index(drop=True)
 
+def plot_map_actual_vs_pred(grp_map: pd.DataFrame, map_col: str, out_path: Path):
+    """Plot actual vs predicted by map (grp_map must contain map_col, actual_win_rate, predicted_proba_mean, n)."""
+    grp_map = grp_map.sort_values("actual_win_rate", ascending=False).reset_index(drop=True)
+    x = np.arange(len(grp_map))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(10, max(4, 0.4 * len(grp_map))))
+    ax.bar(x - width/2, grp_map["actual_win_rate"], width, label="Actual win rate", alpha=0.95)
+    ax.bar(x + width/2, grp_map["predicted_proba_mean"], width, label="Predicted mean prob", alpha=0.85)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(m) for m in grp_map[map_col].tolist()], rotation=45, ha="right")
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("Win rate / Predicted probability")
+    ax.set_title(f"First-kill team: Actual vs Predicted win rate by map (maps with ≥ {MIN_MAP_OPENS} opens)")
+    ax.legend()
+
+    for i, (_, row) in enumerate(grp_map.iterrows()):
+        actual_pct = row["actual_win_rate"]
+        pred_pct = row["predicted_proba_mean"] if not pd.isna(row["predicted_proba_mean"]) else 0.0
+        n = int(row["n"])
+        ax.text(i - width/2, actual_pct + 0.02, f"{actual_pct:.1%}\n({n})", ha="center", va="bottom", fontsize=9)
+        ax.text(i + width/2, pred_pct + 0.02, f"{pred_pct:.1%}", ha="center", va="bottom", fontsize=9)
+
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=FIG_DPI)
+    plt.close(fig)
+    print("Saved:", out_path)
+
+def plot_weapon_compare(merged: pd.DataFrame, out_path: Path, min_count: int = MIN_WEAPON_COUNT, top_n: int = TOP_WEAPONS):
+    """Plot actual win rate vs predicted probability for top weapons."""
+    if "first_kill_weapon" not in merged.columns:
+        print("Skipping weapon plot: missing first_kill_weapon column.")
+        return
+
+    merged["_wp"] = merged["first_kill_weapon"].astype(str)
+    # filter unknown
+    merged = merged[~merged["_wp"].str.lower().isin(["unknown", "", "none", "nan"])].copy()
+    if merged.empty:
+        print("No known weapons found; skipping weapon plot.")
+        return
+
+    counts = merged["_wp"].value_counts()
+    keep = counts[counts >= min_count].nlargest(top_n).index.tolist()
+    sub = merged[merged["_wp"].isin(keep)].copy()
+    if sub.empty:
+        print("No weapons meet min_count; skipping weapon plot.")
+        return
+
+    sub["fk_won"] = (sub["first_kill_team"].astype(str).fillna("") == sub["winner_team"].astype(str).fillna("")).astype(int)
+    # ensure pred_proba numeric
+    if "pred_proba" not in sub.columns:
+        sub["pred_proba"] = np.nan
+    else:
+        sub["pred_proba"] = pd.to_numeric(sub["pred_proba"], errors="coerce")
+
+    grp = sub.groupby("_wp").agg(actual_win=("fk_won", "mean"), pred_proba=("pred_proba", "mean"), n=("round_key", "count")).reset_index()
+    grp = grp.sort_values("actual_win", ascending=False).reset_index(drop=True)
+
+    fig, ax = plt.subplots(figsize=(10, max(4, 0.35 * len(grp))))
+    y = np.arange(len(grp))
+    width = 0.35
+    ax.barh(y - width/2, grp["actual_win"], height=width, label="actual winrate")
+    ax.barh(y + width/2, grp["pred_proba"], height=width, label="predicted prob")
+    ax.set_yticks(y)
+    ax.set_yticklabels(grp["_wp"])
+    ax.invert_yaxis()
+    ax.set_xlabel("Winrate / predicted probability")
+    ax.set_xlim(0, 1)
+    ax.set_title(f"First-kill winrate by weapon (top {len(grp)} weapons, min_count={min_count})")
+    ax.legend()
+
+    for i, (act, pr, n, w) in enumerate(zip(grp["actual_win"], grp["pred_proba"], grp["n"], grp["_wp"])):
+        ax.text(max(act, pr) + 0.01, i, f"{act:.1%} ({n})", va="center", fontsize=9)
+
+    plt.tight_layout()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=FIG_DPI)
+    plt.close(fig)
+    print("Saved:", out_path)
+
 def main():
     cfg = Config()
     processed_path = Path(cfg.processed_dir) / "mm_master_clean.parquet"
@@ -107,91 +190,51 @@ def main():
     rounds = build_opening_rounds(mm)
     print("Built round-level openings:", rounds.shape)
 
-    # detect map column
     map_col = find_map_col(rounds)
     if map_col is None:
         raise SystemExit("No map column ('_map' or 'map') present in round-level data. Aborting.")
 
-    # clean map strings and filter unknowns
     rounds[map_col] = rounds[map_col].astype(str).str.strip().str.lower()
     bad_maps = set(["", "none", "nan", "unknown", "null", "none - t", "none - ct"])
     rounds = rounds[~rounds[map_col].isin(bad_maps)].copy()
 
-    # require winner and first_kill_team exist
     if "winner_team" not in rounds.columns or "first_kill_team" not in rounds.columns:
         raise SystemExit("rounds missing winner_team or first_kill_team columns.")
 
-    # load predictor artifact and predict
     try:
         predictor = Predictor(cfg=cfg)
     except FileNotFoundError:
         raise SystemExit("Model artifact not found. Train model first with: python src/models/train.py")
 
     preds = predictor.predict_from_rounds(rounds)
-    # ensure numeric prob
     if "pred_proba" in preds.columns:
         preds["pred_proba"] = pd.to_numeric(preds["pred_proba"], errors="coerce")
     else:
         preds["pred_proba"] = np.nan
 
-    # merge predictions into rounds
     merged = rounds.merge(preds[["round_key","pred_proba","pred_int"]], on="round_key", how="left")
-
-    # compute actual indicator
     merged["actual_win"] = (merged["first_kill_team"].astype(str).fillna("") == merged["winner_team"].astype(str).fillna("")).astype(int)
 
-    # group by map
+    # --- MAP plot data ---
     grp_map = merged.groupby(map_col).agg(
         actual_win_rate = ("actual_win", "mean"),
         predicted_proba_mean = ("pred_proba", "mean"),
         n = ("round_key", "count")
     ).reset_index()
 
-    # filter by min count
     grp_map = grp_map[grp_map["n"] >= MIN_MAP_OPENS].copy()
     if grp_map.empty:
         raise SystemExit(f"No maps with >= {MIN_MAP_OPENS} openings. Lower MIN_MAP_OPENS or check data.")
 
-    # sort by actual win rate descending
-    grp_map = grp_map.sort_values("actual_win_rate", ascending=False).reset_index(drop=True)
+    map_out = Path(cfg.processed_dir) / "figures" / "firstkill" / "firstkill_map_actual_vs_pred.png"
+    map_out.parent.mkdir(parents=True, exist_ok=True)
+    plot_map_actual_vs_pred(grp_map, map_col, map_out)
 
-    # plotting
-    plt.rcParams.update({'font.size': 11})
-    fig_w = max(8, 0.6 * len(grp_map))
-    fig_h = max(4, 0.5 * len(grp_map))
-    fig, ax = plt.subplots(figsize=(10, max(4, 0.4 * len(grp_map))))
+    # --- WEAPON plot ---
+    weapon_out = Path(cfg.processed_dir) / "figures" / "firstkill" / "firstkill_winrate_by_weapon.png"
+    plot_weapon_compare(merged, weapon_out, min_count=MIN_WEAPON_COUNT, top_n=TOP_WEAPONS)
 
-    x = np.arange(len(grp_map))
-    width = 0.35
-
-    ax.bar(x - width/2, grp_map["actual_win_rate"], width, label="Actual win rate", alpha=0.95)
-    ax.bar(x + width/2, grp_map["predicted_proba_mean"], width, label="Predicted mean prob", alpha=0.85)
-
-    # labels & ticks
-    ax.set_xticks(x)
-    ax.set_xticklabels([str(m) for m in grp_map[map_col].tolist()], rotation=45, ha="right")
-    ax.set_ylim(0, 1)
-    ax.set_ylabel("Win rate / Predicted probability")
-    ax.set_title("First-kill team: Actual vs Predicted win rate by map (maps with ≥ %d opens)" % MIN_MAP_OPENS)
-    ax.legend()
-
-    # annotate counts & percentages
-    for i, (_, row) in enumerate(grp_map.iterrows()):
-        actual_pct = row["actual_win_rate"]
-        pred_pct = row["predicted_proba_mean"] if not pd.isna(row["predicted_proba_mean"]) else 0.0
-        n = int(row["n"])
-        ax.text(i - width/2, actual_pct + 0.02, f"{actual_pct:.1%}\n({n})", ha="center", va="bottom", fontsize=9)
-        ax.text(i + width/2, pred_pct + 0.02, f"{pred_pct:.1%}", ha="center", va="bottom", fontsize=9)
-
-    plt.tight_layout()
-    out_dir = Path(cfg.processed_dir) / "figures" / "firstkill"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "firstkill_map_actual_vs_pred.png"
-    fig.savefig(out_path, dpi=FIG_DPI)
-    plt.close(fig)
-    print("Saved:", out_path)
-    # also print table for quick inspection
-    print(grp_map[["n", "actual_win_rate", "predicted_proba_mean"]].round(3))
+    print("Done - figures saved in:", map_out.parent)
 
 if __name__ == "__main__":
     main()
