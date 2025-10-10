@@ -5,11 +5,11 @@
 Prerequirements 
 - Python 3.10+
 - Install project requirements:
-- 
+
     python -m venv .venv       # or use conda create -n bi venv python=3.13
-- 
+
     .venv\Scripts\activate     # Windows
-- 
+
     pip install -r requirements.txt
 
 Run ETL (load & clean raw -> processed)
