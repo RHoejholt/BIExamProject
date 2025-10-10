@@ -11,7 +11,6 @@ from ..config import Config
 from .extract import Extractor
 from .transform import Transformer
 from .load import Loader
-from ..features.build_features import add_opening_kill_flag
 from .map_utils import filter_and_scale_mm
 
 logging.basicConfig(level=logging.INFO)
@@ -69,7 +68,6 @@ def run_all():
                 mm[c] = pd.to_numeric(mm[c], errors="coerce")
         # filter maps and scale to pixel coords
         mm = filter_and_scale_mm(mm, cfg.map_bounds)
-        mm = add_opening_kill_flag(mm)
         loader.save_dataframe(mm, "mm_master_clean")
         logger.info("Saved mm_master_clean")
     else:
